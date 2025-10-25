@@ -76,6 +76,10 @@ type (
 		// (either all statuses have been read or an error occurred) and
 		// therefore can be used in range loops.
 		KeyValueStores(ctx context.Context) KeyValueLister
+
+		// PrepareKeyValueConfig prepares the KeyValue configuration for the given context and configuration.
+		// It returns the same configuration that is used by the CreateKeyValue, UpdateKeyValue, and CreateOrUpdateKeyValue methods.
+		PrepareKeyValueConfig(ctx context.Context, cfg KeyValueConfig) (StreamConfig, error)
 	}
 
 	// KeyValue contains methods to operate on a KeyValue store.
