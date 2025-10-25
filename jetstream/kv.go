@@ -516,7 +516,7 @@ func (js *jetStream) KeyValue(ctx context.Context, bucket string) (KeyValue, err
 }
 
 func (js *jetStream) CreateKeyValue(ctx context.Context, cfg KeyValueConfig) (KeyValue, error) {
-	scfg, err := js.prepareKeyValueConfig(ctx, cfg)
+	scfg, err := js.PrepareKeyValueConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -557,7 +557,7 @@ func (js *jetStream) CreateKeyValue(ctx context.Context, cfg KeyValueConfig) (Ke
 }
 
 func (js *jetStream) UpdateKeyValue(ctx context.Context, cfg KeyValueConfig) (KeyValue, error) {
-	scfg, err := js.prepareKeyValueConfig(ctx, cfg)
+	scfg, err := js.PrepareKeyValueConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -578,7 +578,7 @@ func (js *jetStream) UpdateKeyValue(ctx context.Context, cfg KeyValueConfig) (Ke
 }
 
 func (js *jetStream) CreateOrUpdateKeyValue(ctx context.Context, cfg KeyValueConfig) (KeyValue, error) {
-	scfg, err := js.prepareKeyValueConfig(ctx, cfg)
+	scfg, err := js.PrepareKeyValueConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -595,7 +595,7 @@ func (js *jetStream) CreateOrUpdateKeyValue(ctx context.Context, cfg KeyValueCon
 	return mapStreamToKVS(js, pushJS, stream), nil
 }
 
-func (js *jetStream) prepareKeyValueConfig(ctx context.Context, cfg KeyValueConfig) (StreamConfig, error) {
+func (js *jetStream) PrepareKeyValueConfig(ctx context.Context, cfg KeyValueConfig) (StreamConfig, error) {
 	if !bucketValid(cfg.Bucket) {
 		return StreamConfig{}, ErrInvalidBucketName
 	}
