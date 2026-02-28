@@ -191,6 +191,41 @@ func TestUpdateKeyValue(t *testing.T) {
 	expectOk(t, err)
 }
 
+func TestUpdateKeyValue_PreserveExistingDenyDelete(t *testing.T) {
+	s := RunBasicJetStreamServer()
+	defer shutdownJSServerAndRemoveStorage(t, s)
+
+	nc, js := jsClient(t, s)
+	defer nc.Close()
+	ctx := context.Background()
+
+	_, err := js.CreateStream(ctx, jetstream.StreamConfig{
+		Name:              "KV_TEST",
+		Description:       "Test KV",
+		Subjects:          []string{"$KV.TEST.>"},
+		MaxMsgsPerSubject: 1,
+		MaxMsgs:           -1,
+		MaxBytes:          -1,
+		MaxConsumers:      -1,
+		AllowRollup:       true,
+		AllowDirect:       true,
+		DenyDelete:        false,
+		Discard:           jetstream.DiscardNew,
+	})
+	expectOk(t, err)
+
+	_, err = js.UpdateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: "TEST", Description: "Updated"})
+	expectOk(t, err)
+
+	updatedStream, err := js.Stream(ctx, "KV_TEST")
+	expectOk(t, err)
+	updatedCfg := updatedStream.CachedInfo().Config
+
+	if updatedCfg.DenyDelete {
+		t.Fatalf("expected updated stream config to preserve deny_delete=false")
+	}
+}
+
 func TestCreateOrUpdateKeyValue(t *testing.T) {
 	s := RunBasicJetStreamServer()
 	defer shutdownJSServerAndRemoveStorage(t, s)

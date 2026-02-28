@@ -705,6 +705,12 @@ func (js *jetStream) prepareKeyValueConfig(ctx context.Context, cfg KeyValueConf
 		scfg.Subjects = []string{fmt.Sprintf(kvSubjectsTmpl, cfg.Bucket)}
 	}
 
+	if stream, err := js.Stream(ctx, scfg.Name); err == nil {
+		if info, infoErr := stream.Info(ctx); infoErr == nil {
+			scfg.DenyDelete = info.Config.DenyDelete
+		}
+	}
+
 	return scfg, nil
 }
 
