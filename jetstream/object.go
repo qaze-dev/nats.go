@@ -52,6 +52,10 @@ type (
 		// will be returned.
 		CreateObjectStore(ctx context.Context, cfg ObjectStoreConfig) (ObjectStore, error)
 
+		// PrepareObjectStoreConfig prepares the ObjectStore configuration for the
+		// given context and configuration and returns the resulting stream config.
+		PrepareObjectStoreConfig(ctx context.Context, cfg ObjectStoreConfig) (StreamConfig, error)
+
 		// UpdateObjectStore will update an existing object store with the given
 		// configuration.
 		//
@@ -489,7 +493,7 @@ const (
 )
 
 func (js *jetStream) CreateObjectStore(ctx context.Context, cfg ObjectStoreConfig) (ObjectStore, error) {
-	scfg, err := js.prepareObjectStoreConfig(cfg)
+	scfg, err := js.PrepareObjectStoreConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -512,7 +516,7 @@ func (js *jetStream) CreateObjectStore(ctx context.Context, cfg ObjectStoreConfi
 }
 
 func (js *jetStream) UpdateObjectStore(ctx context.Context, cfg ObjectStoreConfig) (ObjectStore, error) {
-	scfg, err := js.prepareObjectStoreConfig(cfg)
+	scfg, err := js.PrepareObjectStoreConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -534,7 +538,7 @@ func (js *jetStream) UpdateObjectStore(ctx context.Context, cfg ObjectStoreConfi
 }
 
 func (js *jetStream) CreateOrUpdateObjectStore(ctx context.Context, cfg ObjectStoreConfig) (ObjectStore, error) {
-	scfg, err := js.prepareObjectStoreConfig(cfg)
+	scfg, err := js.PrepareObjectStoreConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -551,7 +555,7 @@ func (js *jetStream) CreateOrUpdateObjectStore(ctx context.Context, cfg ObjectSt
 	return mapStreamToObjectStore(js, pushJS, cfg.Bucket, stream), nil
 }
 
-func (js *jetStream) prepareObjectStoreConfig(cfg ObjectStoreConfig) (StreamConfig, error) {
+func (js *jetStream) PrepareObjectStoreConfig(_ context.Context, cfg ObjectStoreConfig) (StreamConfig, error) {
 	if !validBucketRe.MatchString(cfg.Bucket) {
 		return StreamConfig{}, ErrInvalidStoreName
 	}
@@ -571,24 +575,33 @@ func (js *jetStream) prepareObjectStoreConfig(cfg ObjectStoreConfig) (StreamConf
 	if maxBytes == 0 {
 		maxBytes = -1
 	}
+	duplicateWindow := 2 * time.Minute
+	if cfg.TTL > 0 && cfg.TTL < duplicateWindow {
+		duplicateWindow = cfg.TTL
+	}
 	var compression StoreCompression
 	if cfg.Compression {
 		compression = S2Compression
 	}
 	scfg := StreamConfig{
-		Name:        fmt.Sprintf(objNameTmpl, name),
-		Description: cfg.Description,
-		Subjects:    []string{chunks, meta},
-		MaxAge:      cfg.TTL,
-		MaxBytes:    maxBytes,
-		Storage:     cfg.Storage,
-		Replicas:    replicas,
-		Placement:   cfg.Placement,
-		Discard:     DiscardNew,
-		AllowRollup: true,
-		AllowDirect: true,
-		Metadata:    cfg.Metadata,
-		Compression: compression,
+		Name:              fmt.Sprintf(objNameTmpl, name),
+		Description:       cfg.Description,
+		Subjects:          []string{chunks, meta},
+		MaxAge:            cfg.TTL,
+		MaxBytes:          maxBytes,
+		MaxMsgSize:        -1,
+		MaxMsgs:           -1,
+		MaxMsgsPerSubject: -1,
+		MaxConsumers:      -1,
+		Storage:           cfg.Storage,
+		Replicas:          replicas,
+		Placement:         cfg.Placement,
+		Discard:           DiscardNew,
+		AllowRollup:       true,
+		AllowDirect:       true,
+		Duplicates:        duplicateWindow,
+		Metadata:          cfg.Metadata,
+		Compression:       compression,
 	}
 
 	return scfg, nil
@@ -675,8 +688,17 @@ func (obs *obs) Put(ctx context.Context, meta ObjectMeta, r io.Reader) (*ObjectI
 		return perr
 	}
 
+	opts := []JetStreamOpt{
+		WithPublishAsyncErrHandler(func(js JetStream, _ *nats.Msg, err error) { setErr(err) }),
+	}
+
+	// if context deadline is not set, use default JetStream timeout (per publish)
+	if _, ok := ctx.Deadline(); !ok {
+		opts = append(opts, WithPublishAsyncTimeout(obs.js.opts.DefaultTimeout))
+	}
+
 	// Create our own JS context to handle errors etc.
-	pubJS, err := New(obs.js.conn, WithPublishAsyncErrHandler(func(js JetStream, _ *nats.Msg, err error) { setErr(err) }))
+	pubJS, err := New(obs.js.conn, opts...)
 	if err != nil {
 		return nil, err
 	}

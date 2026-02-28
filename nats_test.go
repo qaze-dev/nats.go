@@ -308,8 +308,8 @@ func TestSimplifiedURLs(t *testing.T) {
 			}
 			// Check server pool directly
 			for i, u := range nc.srvPool {
-				if u.url.String() != test.expected[i] {
-					t.Fatalf("Expected url %q, got %q", test.expected[i], u.url.String())
+				if u.URL.String() != test.expected[i] {
+					t.Fatalf("Expected url %q, got %q", test.expected[i], u.URL.String())
 				}
 			}
 		})
@@ -326,7 +326,7 @@ func TestServersRandomize(t *testing.T) {
 	// Build []string from srvPool
 	clientServers := []string{}
 	for _, s := range nc.srvPool {
-		clientServers = append(clientServers, s.url.String())
+		clientServers = append(clientServers, s.URL.String())
 	}
 	// In theory this could happen..
 	if reflect.DeepEqual(testServers, clientServers) {
@@ -344,7 +344,7 @@ func TestServersRandomize(t *testing.T) {
 	// Build []string from srvPool
 	clientServers = []string{}
 	for _, s := range nc.srvPool {
-		clientServers = append(clientServers, s.url.String())
+		clientServers = append(clientServers, s.URL.String())
 	}
 	if !reflect.DeepEqual(testServers, clientServers) {
 		t.Fatalf("ServerPool list should not be randomized\n")
@@ -364,7 +364,7 @@ func TestServersRandomize(t *testing.T) {
 	// Build []string from srvPool
 	clientServers = []string{}
 	for _, s := range nc.srvPool {
-		clientServers = append(clientServers, s.url.String())
+		clientServers = append(clientServers, s.URL.String())
 	}
 	// In theory this could happen..
 	if reflect.DeepEqual(testServers, clientServers) {
@@ -384,7 +384,7 @@ func TestSelectNextServer(t *testing.T) {
 		t.Fatalf("Problem setting up Server Pool: %v\n", err)
 	}
 	if nc.current != nc.srvPool[0] {
-		t.Fatalf("Wrong default selection: %v\n", nc.current.url)
+		t.Fatalf("Wrong default selection: %v\n", nc.current.URL)
 	}
 
 	sel, err := nc.selectNextServer()
@@ -395,18 +395,18 @@ func TestSelectNextServer(t *testing.T) {
 	if len(nc.srvPool) != len(testServers) {
 		t.Fatalf("List is incorrect size: %d vs %d\n", len(nc.srvPool), len(testServers))
 	}
-	if nc.current.url.String() != testServers[1] {
-		t.Fatalf("Selection incorrect: %v vs %v\n", nc.current.url, testServers[1])
+	if nc.current.URL.String() != testServers[1] {
+		t.Fatalf("Selection incorrect: %v vs %v\n", nc.current.URL, testServers[1])
 	}
-	if nc.srvPool[len(nc.srvPool)-1].url.String() != testServers[0] {
+	if nc.srvPool[len(nc.srvPool)-1].URL.String() != testServers[0] {
 		t.Fatalf("Did not push old to last position\n")
 	}
 	if sel != nc.srvPool[0] {
-		t.Fatalf("Did not return correct server: %v vs %v\n", sel.url, nc.srvPool[0].url)
+		t.Fatalf("Did not return correct server: %v vs %v\n", sel.URL, nc.srvPool[0].URL)
 	}
 
 	// Test that we do not keep servers where we have tried to reconnect past our limit.
-	nc.srvPool[0].reconnects = int(opts.MaxReconnect)
+	nc.srvPool[0].Reconnects = int(opts.MaxReconnect)
 	if _, err := nc.selectNextServer(); err != nil {
 		t.Fatalf("Got an err: %v\n", err)
 	}
@@ -414,10 +414,10 @@ func TestSelectNextServer(t *testing.T) {
 	if len(nc.srvPool) != len(testServers)-1 {
 		t.Fatalf("List is incorrect size: %d vs %d\n", len(nc.srvPool), len(testServers)-1)
 	}
-	if nc.current.url.String() != testServers[2] {
-		t.Fatalf("Selection incorrect: %v vs %v\n", nc.current.url, testServers[2])
+	if nc.current.URL.String() != testServers[2] {
+		t.Fatalf("Selection incorrect: %v vs %v\n", nc.current.URL, testServers[2])
 	}
-	if nc.srvPool[len(nc.srvPool)-1].url.String() == testServers[1] {
+	if nc.srvPool[len(nc.srvPool)-1].URL.String() == testServers[1] {
 		t.Fatalf("Did not throw away the last server correctly\n")
 	}
 }
@@ -1001,7 +1001,7 @@ func TestAsyncINFO(t *testing.T) {
 	c.setupServerPool()
 
 	// Partials requiring argBuf
-	expectedServer := serverInfo{
+	expectedServer := ServerInfo{
 		ID:           "test",
 		Host:         "localhost",
 		Port:         4222,
@@ -1113,13 +1113,13 @@ func TestAsyncINFO(t *testing.T) {
 	// Capture the pool sequence after randomization
 	urlsAfterPoolSetup := make([]string, 0, len(c.srvPool))
 	for _, srv := range c.srvPool {
-		urlsAfterPoolSetup = append(urlsAfterPoolSetup, srv.url.Host)
+		urlsAfterPoolSetup = append(urlsAfterPoolSetup, srv.URL.Host)
 	}
 	checkNewURLsAddedRandomly := func() {
 		t.Helper()
 		var ok bool
 		for i := 0; i < len(urlsAfterPoolSetup); i++ {
-			if c.srvPool[i].url.Host != urlsAfterPoolSetup[i] {
+			if c.srvPool[i].URL.Host != urlsAfterPoolSetup[i] {
 				ok = true
 				break
 			}
@@ -1139,7 +1139,7 @@ func TestAsyncINFO(t *testing.T) {
 	}
 	checkNewURLsAddedRandomly()
 	// Check that we have not moved the first URL
-	if u := c.srvPool[0].url.Host; u != urlsAfterPoolSetup[0] {
+	if u := c.srvPool[0].URL.Host; u != urlsAfterPoolSetup[0] {
 		t.Fatalf("Expected first URL to be %q, got %q", urlsAfterPoolSetup[0], u)
 	}
 }
@@ -1193,6 +1193,30 @@ func TestConnServers(t *testing.T) {
 	c.setupServerPool()
 
 	validateURLs(c.Servers(), "nats://localhost:4333", "nats://localhost:4444")
+}
+
+func TestIgnoreDiscoveredServers(t *testing.T) {
+	opts := GetDefaultOptions()
+	opts.IgnoreDiscoveredServers = true
+	c := &Conn{Opts: opts}
+	c.ps = &parseState{}
+	c.setupServerPool()
+
+	if len(c.Servers()) != 1 {
+		t.Fatalf("Expected 1 server, got %d", len(c.Servers()))
+	}
+
+	err := c.parse([]byte("INFO {\"connect_urls\":[\"localhost:5222\", \"localhost:6222\"]}\r\n"))
+	if err != nil {
+		t.Fatalf("Unexpected: %d : %v\n", c.ps.state, err)
+	}
+
+	if len(c.Servers()) != 1 {
+		t.Fatalf("Expected 1 server, got %d: %v", len(c.Servers()), c.Servers())
+	}
+	if len(c.DiscoveredServers()) != 0 {
+		t.Fatalf("Expected no discovered servers, got %v", c.DiscoveredServers())
+	}
 }
 
 func TestNoEchoOldServer(t *testing.T) {
@@ -1850,5 +1874,44 @@ func TestTimeoutWriterRecovery(t *testing.T) {
 	expectedData := append(testData, testData2...)
 	if !bytes.Equal(mc.data, expectedData) {
 		t.Fatalf("Expected data %q, got %q", expectedData, mc.data)
+	}
+}
+
+func TestValidateSubject(t *testing.T) {
+	tests := []struct {
+		name    string
+		subject string
+		wantErr bool
+	}{
+		{"valid short", "foo", false},
+		{"valid with dots", "foo.bar.baz", false},
+		{"valid long", "metrics.production.server01.cpu.usage.percent", false},
+		{"empty string", "", true},
+		{"contains space", "foo bar", true},
+		{"contains tab", "foo\tbar", true},
+		{"contains CR", "foo\rbar", true},
+		{"contains LF", "foo\nbar", true},
+		{"space at start", " foo", true},
+		{"space at end", "foo ", true},
+		{"tab at start", "\tfoo", true},
+		{"newline at end", "foo\n", true},
+		{"valid with wildcards", "foo.*.bar.>", false},
+		{"valid with hyphen", "foo-bar-baz", false},
+		{"valid with underscore", "foo_bar_baz", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSubject(tt.subject)
+			if tt.wantErr {
+				if !errors.Is(err, ErrBadSubject) {
+					t.Errorf("validateSubject(%q) error = %v, want ErrBadSubject", tt.subject, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("validateSubject(%q) unexpected error: %v", tt.subject, err)
+			}
+		})
 	}
 }

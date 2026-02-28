@@ -50,6 +50,11 @@ func TestKeyValueBasics(t *testing.T) {
 	if r != 1 {
 		t.Fatalf("Expected 1 for the revision, got %d", r)
 	}
+
+	// put, invalid key
+	_, err = kv.Put(ctx, ".invalid", []byte("value"))
+	expectErr(t, err, jetstream.ErrInvalidKey)
+
 	// Simple Get
 	e, err := kv.Get(ctx, "name")
 	expectOk(t, err)
@@ -59,6 +64,10 @@ func TestKeyValueBasics(t *testing.T) {
 	if e.Revision() != 1 {
 		t.Fatalf("Expected 1 for the revision, got %d", e.Revision())
 	}
+
+	// get, invalid key
+	_, err = kv.Get(ctx, ".invalid")
+	expectErr(t, err, jetstream.ErrInvalidKey)
 
 	// Delete
 	err = kv.Delete(ctx, "name")
@@ -74,6 +83,10 @@ func TestKeyValueBasics(t *testing.T) {
 	expectErr(t, err)
 	err = kv.Delete(ctx, "name", jetstream.LastRevision(3))
 	expectOk(t, err)
+
+	// delete, invalid key
+	err = kv.Delete(ctx, ".invalid")
+	expectErr(t, err, jetstream.ErrInvalidKey)
 
 	// Conditional Updates.
 	r, err = kv.Update(ctx, "name", []byte("rip"), 4)
@@ -169,6 +182,10 @@ func TestCreateKeyValue(t *testing.T) {
 
 	// assert that we're backwards compatible
 	expectErr(t, err, jetstream.ErrStreamNameAlreadyInUse)
+
+	// invalid configs
+	_, err = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: "NEW", History: 200})
+	expectErr(t, err, jetstream.ErrHistoryTooLarge)
 }
 
 func TestUpdateKeyValue(t *testing.T) {
@@ -189,6 +206,41 @@ func TestUpdateKeyValue(t *testing.T) {
 	// update the bucket
 	_, err = js.UpdateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: "TEST", Description: "New KV"})
 	expectOk(t, err)
+}
+
+func TestUpdateKeyValue_PreserveExistingDenyDelete(t *testing.T) {
+	s := RunBasicJetStreamServer()
+	defer shutdownJSServerAndRemoveStorage(t, s)
+
+	nc, js := jsClient(t, s)
+	defer nc.Close()
+	ctx := context.Background()
+
+	_, err := js.CreateStream(ctx, jetstream.StreamConfig{
+		Name:              "KV_TEST",
+		Description:       "Test KV",
+		Subjects:          []string{"$KV.TEST.>"},
+		MaxMsgsPerSubject: 1,
+		MaxMsgs:           -1,
+		MaxBytes:          -1,
+		MaxConsumers:      -1,
+		AllowRollup:       true,
+		AllowDirect:       true,
+		DenyDelete:        false,
+		Discard:           jetstream.DiscardNew,
+	})
+	expectOk(t, err)
+
+	_, err = js.UpdateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: "TEST", Description: "Updated"})
+	expectOk(t, err)
+
+	updatedStream, err := js.Stream(ctx, "KV_TEST")
+	expectOk(t, err)
+	updatedCfg := updatedStream.CachedInfo().Config
+
+	if updatedCfg.DenyDelete {
+		t.Fatalf("expected updated stream config to preserve deny_delete=false")
+	}
 }
 
 func TestCreateOrUpdateKeyValue(t *testing.T) {
@@ -246,7 +298,7 @@ func TestKeyValueHistory(t *testing.T) {
 		age, err := strconv.Atoi(string(v.Value()))
 		expectOk(t, err)
 		if age != i+62 {
-			t.Fatalf("Expected data value of %d, got %d", i+22, age)
+			t.Fatalf("Expected data value of %d, got %d", i+62, age)
 		}
 	}
 }
@@ -1443,7 +1495,7 @@ func TestListKeyValueStores(t *testing.T) {
 			if len(names) != test.bucketsNum {
 				t.Fatalf("Invalid number of stream names; want: %d; got: %d", test.bucketsNum, len(names))
 			}
-			infos := make([]nats.KeyValueStatus, 0)
+			infos := make([]jetstream.KeyValueStatus, 0)
 			kvInfos := js.KeyValueStores(ctx)
 			for info := range kvInfos.Status() {
 				infos = append(infos, info)
@@ -2113,6 +2165,9 @@ func TestKeyValueListKeysDuplicates(t *testing.T) {
 						for i := range 5 {
 							key := fmt.Sprintf("key_%d", i)
 							if _, err := kv.PutString(ctx, key, "updated"); err != nil {
+								if errors.Is(err, nats.ErrConnectionClosed) {
+									return
+								}
 								t.Logf("Error updating key %s: %v", key, err)
 							}
 						}
@@ -2147,86 +2202,166 @@ func TestKeyValueListKeysDuplicates(t *testing.T) {
 }
 
 func TestKeyValueWithSources(t *testing.T) {
-	s := RunBasicJetStreamServer()
-	defer shutdownJSServerAndRemoveStorage(t, s)
+	t.Run("kv -> kv", func(t *testing.T) {
+		s := RunBasicJetStreamServer()
+		defer shutdownJSServerAndRemoveStorage(t, s)
 
-	nc, js := jsClient(t, s)
-	defer nc.Close()
-	ctx := context.Background()
+		nc, js := jsClient(t, s)
+		defer nc.Close()
+		ctx := context.Background()
 
-	kv1, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
-		Bucket:  "SOURCE1",
-		History: 5,
-	})
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-
-	kv2, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
-		Bucket:  "SOURCE2",
-		History: 5,
-	})
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-
-	kv3, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
-		Bucket:  "SOURCED",
-		History: 5,
-		Sources: []*jetstream.StreamSource{
-			{Name: "SOURCE1"},
-			{Name: "SOURCE2"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-
-	if _, err := kv1.Put(ctx, "key1", []byte("value1")); err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-
-	if _, err := kv2.Put(ctx, "key2", []byte("value2")); err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-
-	time.Sleep(200 * time.Millisecond)
-
-	val, err := kv3.Get(ctx, "key1")
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-	if string(val.Value()) != "value1" {
-		t.Fatalf("Expected value1, got %s", string(val.Value()))
-	}
-
-	val, err = kv3.Get(ctx, "key2")
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-	if string(val.Value()) != "value2" {
-		t.Fatalf("Expected value2, got %s", string(val.Value()))
-	}
-
-	stream, err := js.Stream(ctx, "KV_SOURCED")
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-
-	info, err := stream.Info(ctx)
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-
-	if len(info.Config.Sources) != 2 {
-		t.Fatalf("Expected 2 sources, got %d", len(info.Config.Sources))
-	}
-
-	for _, src := range info.Config.Sources {
-		if len(src.SubjectTransforms) != 1 {
-			t.Fatalf("Expected 1 subject transform, got %d", len(src.SubjectTransforms))
+		kv1, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+			Bucket:  "SOURCE1",
+			History: 5,
+		})
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
 		}
-	}
+
+		kv2, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+			Bucket:  "SOURCE2",
+			History: 5,
+		})
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		kv3, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+			Bucket:  "SOURCED",
+			History: 5,
+			Sources: []*jetstream.StreamSource{
+				{Name: "SOURCE1"},
+				// for the second one, pass the prefix, should still work
+				{Name: "KV_SOURCE2"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		if _, err := kv1.Put(ctx, "key1", []byte("value1")); err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		if _, err := kv2.Put(ctx, "key2", []byte("value2")); err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		time.Sleep(200 * time.Millisecond)
+
+		val, err := kv3.Get(ctx, "key1")
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if string(val.Value()) != "value1" {
+			t.Fatalf("Expected value1, got %s", string(val.Value()))
+		}
+
+		val, err = kv3.Get(ctx, "key2")
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if string(val.Value()) != "value2" {
+			t.Fatalf("Expected value2, got %s", string(val.Value()))
+		}
+
+		stream, err := js.Stream(ctx, "KV_SOURCED")
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		info, err := stream.Info(ctx)
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		if len(info.Config.Sources) != 2 {
+			t.Fatalf("Expected 2 sources, got %d", len(info.Config.Sources))
+		}
+
+		for _, src := range info.Config.Sources {
+			if len(src.SubjectTransforms) != 1 {
+				t.Fatalf("Expected 1 subject transform, got %d", len(src.SubjectTransforms))
+			}
+		}
+	})
+	t.Run("streams -> kv", func(t *testing.T) {
+		s := RunBasicJetStreamServer()
+		defer shutdownJSServerAndRemoveStorage(t, s)
+
+		nc, js := jsClient(t, s)
+		defer nc.Close()
+		ctx := context.Background()
+
+		_, err := js.CreateStream(ctx, jetstream.StreamConfig{
+			Name:     "SOURCE1",
+			Subjects: []string{"S1.>"},
+		})
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		_, err = js.CreateStream(ctx, jetstream.StreamConfig{
+			Name:     "SOURCE2",
+			Subjects: []string{"S2.>"},
+		})
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+			Bucket:  "SOURCED",
+			History: 5,
+			Sources: []*jetstream.StreamSource{
+				{
+					Name: "SOURCE1",
+					SubjectTransforms: []jetstream.SubjectTransformConfig{
+						{
+							Source:      "S1.>",
+							Destination: "$KV.SOURCED.>",
+						},
+					},
+				},
+				{
+					Name: "SOURCE2",
+					SubjectTransforms: []jetstream.SubjectTransformConfig{
+						{
+							Source:      "S2.>",
+							Destination: "$KV.SOURCED.>",
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		if _, err := js.Publish(ctx, "S1.key1", []byte("value1")); err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		if _, err := js.Publish(ctx, "S2.key2", []byte("value2")); err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		time.Sleep(200 * time.Millisecond)
+
+		val, err := kv.Get(ctx, "key1")
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if string(val.Value()) != "value1" {
+			t.Fatalf("Expected value1, got %s", string(val.Value()))
+		}
+
+		val, err = kv.Get(ctx, "key2")
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if string(val.Value()) != "value2" {
+			t.Fatalf("Expected value2, got %s", string(val.Value()))
+		}
+	})
 }
 
 func TestKeyValueGetRevision(t *testing.T) {
@@ -2265,6 +2400,15 @@ func TestKeyValueGetRevision(t *testing.T) {
 	if entry.Revision() != 1 {
 		t.Fatalf("Expected revision 1, got %d", entry.Revision())
 	}
+
+	if err := kv.Delete(ctx, "key"); err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	_, err = kv.GetRevision(ctx, "key", 3)
+	if !errors.Is(err, jetstream.ErrKeyNotFound) {
+		t.Fatalf("Expected ErrKeyNotFound, got %v", err)
+	}
 }
 
 func TestKeyValueStatusBytes(t *testing.T) {
@@ -2293,5 +2437,69 @@ func TestKeyValueStatusBytes(t *testing.T) {
 
 	if status.Bytes() == 0 {
 		t.Fatal("Expected Bytes() to return non-zero value")
+	}
+}
+
+func TestKeyValueConfig(t *testing.T) {
+	s := RunBasicJetStreamServer()
+	defer shutdownJSServerAndRemoveStorage(t, s)
+
+	nc, js := jsClient(t, s)
+	defer nc.Close()
+	ctx := context.Background()
+
+	originalCfg := jetstream.KeyValueConfig{
+		Bucket:       "CONFIG_TEST",
+		Description:  "test bucket for config retrieval",
+		MaxValueSize: 1024,
+		History:      10,
+		TTL:          2 * time.Hour,
+		MaxBytes:     1024 * 1024,
+		Storage:      jetstream.FileStorage,
+		Replicas:     1,
+		Metadata:     map[string]string{"key": "value"},
+	}
+
+	kv, err := js.CreateKeyValue(ctx, originalCfg)
+	if err != nil {
+		t.Fatalf("Error creating KV: %v", err)
+	}
+
+	status, err := kv.Status(ctx)
+	if err != nil {
+		t.Fatalf("Error getting status: %v", err)
+	}
+
+	retrievedCfg := status.Config()
+
+	if retrievedCfg.Bucket != originalCfg.Bucket {
+		t.Errorf("Expected bucket %q, got %q", originalCfg.Bucket, retrievedCfg.Bucket)
+	}
+	if retrievedCfg.Description != originalCfg.Description {
+		t.Errorf("Expected description %q, got %q", originalCfg.Description, retrievedCfg.Description)
+	}
+	if retrievedCfg.MaxValueSize != originalCfg.MaxValueSize {
+		t.Errorf("Expected MaxValueSize %d, got %d", originalCfg.MaxValueSize, retrievedCfg.MaxValueSize)
+	}
+	if retrievedCfg.History != originalCfg.History {
+		t.Errorf("Expected history %d, got %d", originalCfg.History, retrievedCfg.History)
+	}
+	if retrievedCfg.TTL != originalCfg.TTL {
+		t.Errorf("Expected TTL %v, got %v", originalCfg.TTL, retrievedCfg.TTL)
+	}
+	if retrievedCfg.MaxBytes != originalCfg.MaxBytes {
+		t.Errorf("Expected MaxBytes %d, got %d", originalCfg.MaxBytes, retrievedCfg.MaxBytes)
+	}
+	if retrievedCfg.Storage != originalCfg.Storage {
+		t.Errorf("Expected storage %v, got %v", originalCfg.Storage, retrievedCfg.Storage)
+	}
+	if retrievedCfg.Replicas != originalCfg.Replicas {
+		t.Errorf("Expected replicas %d, got %d", originalCfg.Replicas, retrievedCfg.Replicas)
+	}
+	if retrievedCfg.LimitMarkerTTL != originalCfg.LimitMarkerTTL {
+		t.Errorf("Expected LimitMarkerTTL %v, got %v", originalCfg.LimitMarkerTTL, retrievedCfg.LimitMarkerTTL)
+	}
+	if retrievedCfg.Metadata["key"] != originalCfg.Metadata["key"] {
+		t.Errorf("Expected Metadata[key] %q, got %q", originalCfg.Metadata["key"], retrievedCfg.Metadata["key"])
 	}
 }
